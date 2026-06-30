@@ -25,6 +25,21 @@ def hours_to_time(hours):
         m = 0
     return f"{h:02d}:{m:02d}"
 
+def read_uploaded_file(uploaded_file):
+    name = uploaded_file.name.lower()
+    if name.endswith('.csv'):
+        for encoding in ('utf-8', 'utf-8-sig', 'cp1254', 'latin-1'):
+            try:
+                uploaded_file.seek(0)
+                return pd.read_csv(uploaded_file, sep=';', encoding=encoding)
+            except UnicodeDecodeError:
+                continue
+        uploaded_file.seek(0)
+        return pd.read_csv(uploaded_file, sep=';', encoding='utf-8', errors='replace')
+    if name.endswith('.xls') and not name.endswith('.xlsx'):
+        return pd.read_excel(uploaded_file, engine='xlrd')
+    return pd.read_excel(uploaded_file, engine='openpyxl')
+
 # Hesaplama Mantığı (Kanuni Kural)
 def calculate_puantaj(df):
     df_calc = df.copy()
@@ -76,11 +91,7 @@ uploaded_file = st.file_uploader("Lütfen Puantaj Dosyanızı Yükleyin (CSV vey
 
 if uploaded_file is not None:
     try:
-        if uploaded_file.name.endswith('.csv'):
-            # Meyer sistemi genellikle noktalı virgül (;) kullanır
-            df = pd.read_csv(uploaded_file, sep=';', encoding='utf-8')
-        else:
-            df = pd.read_excel(uploaded_file)
+        df = read_uploaded_file(uploaded_file)
             
         required_cols = ['mesaitarih', 'NM', 'FM']
         if not all(col in df.columns for col in required_cols):

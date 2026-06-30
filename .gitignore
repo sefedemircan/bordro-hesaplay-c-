@@ -1,3 +1,5 @@
 /.pytest_cache
+/.venv
 /Oğuz Can Baş - 06.2026 Puantaj.csv
 /__pycache__
+*.pyc
