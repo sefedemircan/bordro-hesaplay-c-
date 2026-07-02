@@ -7,6 +7,7 @@ st.set_page_config(page_title="Puantaj & Mesai Hesaplayıcı", layout="wide", in
 
 WEEKLY_MAX_HOURS = 45.0
 DAILY_WORK_HOURS = 7.5
+SUNDAY_CUT_ABSENCE_HOURS = 9.0
 UNPAID_LEAVE_COLUMN = "UCZIZS"
 DAY_NAMES = ("Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar")
 
@@ -157,6 +158,12 @@ def classify_day(row, is_weekday):
         return "Devamsızlık", 0.0, 0.0, ""
     return "Hafta Sonu", 0.0, 0.0, ""
 
+def expected_daily_hours(row, is_weekday):
+    if not is_weekday:
+        return 0.0
+    ms_h = column_hours(row, "MS")
+    return ms_h if ms_h > 0 else SUNDAY_CUT_ABSENCE_HOURS
+
 def calculate_puantaj(df):
     df_calc = normalize_meyer_rows(df)
 
@@ -177,6 +184,13 @@ def calculate_puantaj(df):
     df_calc["ucretli_izin_h"] = day_info[1]
     df_calc["ucretsiz_izin_h"] = day_info[2]
     df_calc["izin_turu"] = day_info[3]
+    df_calc["beklenen_gunluk_h"] = df_calc.apply(
+        lambda row: expected_daily_hours(row, row["day_of_week"] < 5), axis=1
+    )
+    df_calc["devamsizlik_h"] = df_calc.apply(
+        lambda row: row["beklenen_gunluk_h"] if row["gun_durumu"] == "Devamsızlık" else 0.0,
+        axis=1,
+    )
 
     weekly_rows = []
     for (year, week) in df_calc[["year", "week"]].drop_duplicates().itertuples(index=False):
@@ -196,6 +210,13 @@ def calculate_puantaj(df):
                     df_calc.loc[idx, "NM_h"] += deduct
                     missing_nm -= deduct
 
+        pazar_kesinti_tetik = bool(
+            (
+                df_calc.loc[weekday_mask, "devamsizlik_h"]
+                >= SUNDAY_CUT_ABSENCE_HOURS
+            ).any()
+        )
+
         week_start = df_calc.loc[week_mask, "mesaitarih_dt"].min()
         weekly_rows.append({
             "Hafta": f"{week_start.strftime('%d.%m.%Y')} (H{int(week)})",
@@ -203,6 +224,7 @@ def calculate_puantaj(df):
             "Hafta Sonu FM": hours_to_time(df_calc.loc[weekend_mask, "FM_h"].sum()),
             "Toplam NM": hours_to_time(df_calc.loc[week_mask, "NM_h"].sum()),
             "Toplam FM": hours_to_time(df_calc.loc[week_mask, "FM_h"].sum()),
+            "Pazar Durumu": "Yanar" if pazar_kesinti_tetik else "Hak Edildi",
         })
 
     weekly_df = pd.DataFrame(weekly_rows)
@@ -215,7 +237,9 @@ def calculate_puantaj(df):
         "ucretsiz_izin_gun": int((df_calc["gun_durumu"] == "Ücretsiz İzin").sum()),
         "ucretsiz_izin_saat": df_calc["ucretsiz_izin_h"].sum(),
         "devamsizlik_gun": int((df_calc["gun_durumu"] == "Devamsızlık").sum()),
+        "devamsizlik_saat": df_calc["devamsizlik_h"].sum(),
         "calisma_gun": int((df_calc["gun_durumu"] == "Çalışma").sum()),
+        "pazar_yanan_hafta": int((weekly_df["Pazar Durumu"] == "Yanar").sum()),
     }
 
     daily_df = pd.DataFrame({
@@ -227,6 +251,7 @@ def calculate_puantaj(df):
         "FM (Güncel)": df_calc["FM_h"].apply(hours_to_time),
         "Ücretli İzin": df_calc["ucretli_izin_h"].apply(hours_to_time),
         "Ücretsiz İzin": df_calc["ucretsiz_izin_h"].apply(hours_to_time),
+        "Devamsızlık Saat": df_calc["devamsizlik_h"].apply(hours_to_time),
     })
 
     df_calc["NM (Güncel)"] = df_calc["NM_h"].apply(hours_to_time)
@@ -235,10 +260,12 @@ def calculate_puantaj(df):
     df_calc["İzin Türü"] = df_calc["izin_turu"].replace("", "—")
     df_calc["Ücretli İzin"] = df_calc["ucretli_izin_h"].apply(hours_to_time)
     df_calc["Ücretsiz İzin"] = df_calc["ucretsiz_izin_h"].apply(hours_to_time)
+    df_calc["Devamsızlık Saat"] = df_calc["devamsizlik_h"].apply(hours_to_time)
 
     df_calc = df_calc.drop(
         columns=["mesaitarih_dt", "NM_h", "FM_h", "day_of_week", "year", "week",
-                 "gun_durumu", "ucretli_izin_h", "ucretsiz_izin_h", "izin_turu"]
+                 "gun_durumu", "ucretli_izin_h", "ucretsiz_izin_h", "izin_turu",
+                 "beklenen_gunluk_h", "devamsizlik_h"]
     )
 
     return df_calc, daily_df, weekly_df, summary
@@ -263,6 +290,10 @@ Hafta içi toplam NM 45 saatin altındaysa, hafta sonu FM saatleri otomatik olar
 
 **Gün durumları**  
 Çalışma · Ücretli İzin / Rapor · Ücretsiz İzin · Devamsızlık · Hafta Sonu
+
+**Pazar kesinti kuralı**  
+Yalnızca tek bir iş gününde `9:00` saat tam devamsızlık varsa o haftada pazar "Yanar" olur.  
+Parçalı devamsızlık toplamı `9:00` olsa bile pazar kesintisi tetiklenmez.
     """)
 
 uploaded_file = st.file_uploader(
@@ -310,12 +341,16 @@ if uploaded_file is not None:
             m7.metric("Hafta Sayısı", len(weekly_df))
             m8.metric("Toplam Kayıt", len(daily_df))
 
+            m9, m10 = st.columns(2)
+            m9.metric("Devamsızlık Saati", hours_to_time(summary["devamsizlik_saat"]))
+            m10.metric("Pazar Yanan Hafta", summary["pazar_yanan_hafta"])
+
             st.divider()
             st.subheader("Günlük Özet")
             st.dataframe(daily_df, use_container_width=True, hide_index=True)
 
             st.subheader("Haftalık Mesai Dağılımı")
-            st.caption("45 saat kuralı uygulandıktan sonraki haftalık NM / FM toplamları.")
+            st.caption("45 saat kuralı sonrası NM/FM toplamları ve pazar kesinti durumu.")
             st.dataframe(weekly_df, use_container_width=True, hide_index=True)
 
             with st.expander("Tam detay tablosu", expanded=False):
