@@ -2,11 +2,13 @@ import streamlit as st
 import pandas as pd
 import io
 from datetime import time, timedelta
+from ui_navigation import render_top_navigation
 
-st.set_page_config(page_title="Puantaj & Mesai Hesaplayıcı", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="Puantaj Hesaplama", layout="wide", initial_sidebar_state="collapsed")
+render_top_navigation("calculator")
 
 WEEKLY_MAX_HOURS = 45.0
-DAILY_WORK_HOURS = 7.5
+DAILY_WORK_HOURS = 9.0
 SUNDAY_CUT_ABSENCE_HOURS = 9.0
 UNPAID_LEAVE_COLUMN = "UCZIZS"
 DAY_NAMES = ("Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar")
@@ -48,7 +50,7 @@ def hours_to_time(hours):
     return f"{h:02d}:{m:02d}"
 
 def read_uploaded_file(uploaded_file):
-    name = uploaded_file.name.lower()
+    name = str(getattr(uploaded_file, "name", "")).lower()
     if name.endswith(".csv"):
         for encoding in ("cp1254", "utf-8", "utf-8-sig", "latin-1"):
             try:
@@ -69,7 +71,7 @@ def resolve_column(df, *preferred_names, keyword=None):
     if keyword:
         keyword = keyword.lower()
         for col in df.columns:
-            if keyword in col.lower():
+            if keyword in str(col).lower():
                 return col
     return None
 
@@ -498,7 +500,7 @@ def render_employee_list(employee_list):
 
 # ── Arayüz ─────────────────────────────────────────────────────────────────
 
-st.title("Puantaj & Mesai Hesaplayıcı")
+st.title("Puantaj Hesaplama")
 st.caption("Meyer puantaj dosyalarından mesai düzenlemesi, izin ayrımı ve haftalık FM→NM aktarımı.")
 
 with st.expander("Nasıl çalışır?", expanded=False):
@@ -514,7 +516,7 @@ Hafta içi toplam NM 45 saatin altındaysa, hafta sonu FM saatleri otomatik olar
 | Sütun | Anlam |
 |-------|-------|
 | `IZS`, `YIZS`, `SGKIZS`, `RM` | Ücretli izin / rapor (saatlik) |
-| `EM` | Tam gün ücretli izin (NM=0 ve EM≥7,5 saat) |
+| `EM` | Tam gün ücretli izin (NM=0 ve EM≥9 saat) |
 | `UCZIZS` | Ücretsiz izin |
 | `İzin Açıklama` | İzin türü metni (ör. YILLIK IZIN) |
 
