@@ -3,3 +3,5 @@
 /Oğuz Can Baş - 06.2026 Puantaj.csv
 /__pycache__
 *.pyc
+.env
+env

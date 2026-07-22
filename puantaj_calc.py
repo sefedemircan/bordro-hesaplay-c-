@@ -1,11 +1,12 @@
-import streamlit as st
-import pandas as pd
+"""Meyer puantaj hesaplama çekirdeği (Streamlit ve FastAPI ortak kullanır)."""
+
+from __future__ import annotations
+
 import io
 from datetime import time, timedelta
-from ui_navigation import render_top_navigation
+from typing import BinaryIO
 
-st.set_page_config(page_title="Puantaj Hesaplama", layout="wide", initial_sidebar_state="collapsed")
-render_top_navigation("calculator")
+import pandas as pd
 
 WEEKLY_MAX_HOURS = 45.0
 DAILY_WORK_HOURS = 9.0
@@ -13,7 +14,16 @@ SUNDAY_CUT_ABSENCE_HOURS = 9.0
 UNPAID_LEAVE_COLUMN = "UCZIZS"
 DAY_NAMES = ("Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar")
 
-# ── Yardımcı fonksiyonlar ──────────────────────────────────────────────────
+GUN_DURUMLARI = (
+    "Çalışma",
+    "Ücretli İzin / Rapor",
+    "Ücretsiz İzin",
+    "Devamsızlık",
+    "Hafta Sonu",
+)
+
+REQUIRED_CALC_COLUMNS = ("mesaitarih", "NM", "FM")
+
 
 def time_to_hours(value):
     if pd.isna(value) or (isinstance(value, str) and value.strip() == ""):
@@ -41,6 +51,7 @@ def time_to_hours(value):
         return 0.0
     return 0.0
 
+
 def hours_to_time(hours):
     h = int(hours)
     m = int(round((hours - h) * 60))
@@ -49,20 +60,32 @@ def hours_to_time(hours):
         m = 0
     return f"{h:02d}:{m:02d}"
 
-def read_uploaded_file(uploaded_file):
-    name = str(getattr(uploaded_file, "name", "")).lower()
+
+def read_uploaded_file(uploaded_file: BinaryIO | str, filename: str | None = None) -> pd.DataFrame:
+    name = str(filename if filename not in (None, "") else getattr(uploaded_file, "name", "")).lower()
     if name.endswith(".csv"):
+        if hasattr(uploaded_file, "read"):
+            raw = uploaded_file.read()
+            if hasattr(uploaded_file, "seek"):
+                uploaded_file.seek(0)
+            if isinstance(raw, str):
+                raw = raw.encode("utf-8")
+            for encoding in ("cp1254", "utf-8", "utf-8-sig", "latin-1"):
+                try:
+                    return pd.read_csv(io.BytesIO(raw), sep=";", encoding=encoding)
+                except UnicodeDecodeError:
+                    continue
+            return pd.read_csv(io.BytesIO(raw), sep=";", encoding="utf-8", errors="replace")
         for encoding in ("cp1254", "utf-8", "utf-8-sig", "latin-1"):
             try:
-                uploaded_file.seek(0)
                 return pd.read_csv(uploaded_file, sep=";", encoding=encoding)
             except UnicodeDecodeError:
                 continue
-        uploaded_file.seek(0)
         return pd.read_csv(uploaded_file, sep=";", encoding="utf-8", errors="replace")
     if name.endswith(".xls") and not name.endswith(".xlsx"):
         return pd.read_excel(uploaded_file, engine="xlrd")
     return pd.read_excel(uploaded_file, engine="openpyxl")
+
 
 def resolve_column(df, *preferred_names, keyword=None):
     for name in preferred_names:
@@ -75,6 +98,7 @@ def resolve_column(df, *preferred_names, keyword=None):
                 return col
     return None
 
+
 def normalize_meyer_columns(df):
     df = df.copy()
     izin_col = resolve_column(df, "İzin Açıklama", keyword="zin")
@@ -82,8 +106,12 @@ def normalize_meyer_columns(df):
         df = df.rename(columns={izin_col: "İzin Açıklama"})
     return df
 
+
 def normalize_meyer_rows(df):
     df = normalize_meyer_columns(df.copy())
+
+    if "mesaitarih" not in df.columns:
+        raise ValueError("Zorunlu sütunlar eksik: mesaitarih")
 
     if pd.api.types.is_datetime64_any_dtype(df["mesaitarih"]):
         df["mesaitarih_dt"] = pd.to_datetime(df["mesaitarih"], errors="coerce")
@@ -98,16 +126,19 @@ def normalize_meyer_rows(df):
 
     return df.reset_index(drop=True)
 
+
 def is_placeholder(value):
     if pd.isna(value):
         return True
     text = str(value).strip()
     return text == "" or text == "#__#"
 
+
 def column_hours(row, column):
     if column not in row.index or is_placeholder(row[column]):
         return 0.0
     return time_to_hours(row[column])
+
 
 def paid_leave_hours(row):
     nm_h = column_hours(row, "NM")
@@ -124,8 +155,10 @@ def paid_leave_hours(row):
 
     return 0.0
 
+
 def unpaid_leave_hours(row):
     return column_hours(row, UNPAID_LEAVE_COLUMN)
+
 
 def izin_turu_label(row):
     aciklama = str(row.get("İzin Açıklama", "")).upper()
@@ -142,6 +175,7 @@ def izin_turu_label(row):
     if paid_leave_hours(row) > 0:
         return "Ücretli İzin"
     return ""
+
 
 def classify_day(row, is_weekday):
     nm_h = column_hours(row, "NM")
@@ -160,19 +194,23 @@ def classify_day(row, is_weekday):
         return "Devamsızlık", 0.0, 0.0, ""
     return "Hafta Sonu", 0.0, 0.0, ""
 
+
 def expected_daily_hours(row, is_weekday):
     if not is_weekday:
         return 0.0
     ms_h = column_hours(row, "MS")
     return ms_h if ms_h > 0 else SUNDAY_CUT_ABSENCE_HOURS
 
+
 def series_hours(df, column):
     if column not in df.columns:
         return pd.Series(0.0, index=df.index)
     return df[column].apply(time_to_hours)
 
+
 def count_positive_days(hours_series):
     return int((hours_series > 0).sum())
+
 
 def build_leave_breakdown(df_calc):
     izs_h = series_hours(df_calc, "IZS")
@@ -246,7 +284,12 @@ def build_leave_breakdown(df_calc):
     ]
     return pd.DataFrame(rows)
 
+
 def calculate_puantaj(df):
+    missing = [col for col in REQUIRED_CALC_COLUMNS if col not in df.columns]
+    if missing:
+        raise ValueError("Zorunlu sütunlar eksik: " + ", ".join(missing))
+
     df_calc = normalize_meyer_rows(df)
 
     df_calc["NM_h"] = df_calc["NM"].apply(time_to_hours)
@@ -323,16 +366,21 @@ def calculate_puantaj(df):
     kismi_hafta = int((weekly_df["Tür"] == "Kısmi").sum()) if not weekly_df.empty else 0
 
     summary = {
-        "toplam_nm": df_calc["NM_h"].sum(),
-        "toplam_fm": df_calc["FM_h"].sum(),
+        "toplam_nm": float(df_calc["NM_h"].sum()),
+        "toplam_fm": float(df_calc["FM_h"].sum()),
+        "toplam_nm_fmt": hours_to_time(df_calc["NM_h"].sum()),
+        "toplam_fm_fmt": hours_to_time(df_calc["FM_h"].sum()),
         "ucretli_izin_gun": int((df_calc["gun_durumu"] == "Ücretli İzin / Rapor").sum()),
-        "ucretli_izin_saat": df_calc["ucretli_izin_h"].sum(),
+        "ucretli_izin_saat": float(df_calc["ucretli_izin_h"].sum()),
+        "ucretli_izin_saat_fmt": hours_to_time(df_calc["ucretli_izin_h"].sum()),
         "ucretsiz_izin_gun": int((df_calc["gun_durumu"] == "Ücretsiz İzin").sum()),
-        "ucretsiz_izin_saat": df_calc["ucretsiz_izin_h"].sum(),
+        "ucretsiz_izin_saat": float(df_calc["ucretsiz_izin_h"].sum()),
+        "ucretsiz_izin_saat_fmt": hours_to_time(df_calc["ucretsiz_izin_h"].sum()),
         "devamsizlik_gun": int((df_calc["gun_durumu"] == "Devamsızlık").sum()),
-        "devamsizlik_saat": df_calc["devamsizlik_h"].sum(),
+        "devamsizlik_saat": float(df_calc["devamsizlik_h"].sum()),
+        "devamsizlik_saat_fmt": hours_to_time(df_calc["devamsizlik_h"].sum()),
         "calisma_gun": int((df_calc["gun_durumu"] == "Çalışma").sum()),
-        "pazar_yanan_hafta": int((weekly_df["Pazar Durumu"] == "Yanar").sum()),
+        "pazar_yanan_hafta": int((weekly_df["Pazar Durumu"] == "Yanar").sum()) if not weekly_df.empty else 0,
         "donem": f"{period_start.strftime('%d.%m.%Y')} – {period_end.strftime('%d.%m.%Y')}",
         "toplam_gun": len(df_calc),
         "iso_hafta_sayisi": len(weekly_df),
@@ -368,11 +416,13 @@ def calculate_puantaj(df):
 
     return df_calc, daily_df, weekly_df, leave_breakdown_df, summary
 
+
 def is_bulk_file(df):
     if "sicilno" not in df.columns:
         return False
     valid = df[df["sicilno"].notna()]
     return valid["sicilno"].nunique() > 1
+
 
 def build_employee_list(df):
     valid = df[df["sicilno"].notna()].copy()
@@ -398,182 +448,8 @@ def build_employee_list(df):
         listed = listed.rename(columns={bolum_col: "Bölüm"})
     return listed
 
+
 def filter_employee_df(df, sicilno):
     employee_df = df[df["sicilno"].notna()].copy()
     employee_df["sicilno"] = employee_df["sicilno"].astype(int).astype(str).str.zfill(5)
-    return employee_df[employee_df["sicilno"] == str(sicilno)].copy()
-
-def render_employee_detail(df, employee_label):
-    required_cols = ["mesaitarih", "NM", "FM"]
-    if not all(col in df.columns for col in required_cols):
-        st.error(f"Dosyada zorunlu sütunlar eksik: {', '.join(required_cols)}")
-        return
-
-    st.subheader(employee_label)
-
-    with st.expander("Ham veri düzenleme", expanded=False):
-        st.info("NM, FM veya izin sütunlarını düzenleyebilirsiniz. Değişiklikler anında yansır.")
-        edited_df = st.data_editor(
-            df, use_container_width=True, num_rows="dynamic", key=f"editor_{employee_label}"
-        )
-
-    processed_df, daily_df, weekly_df, leave_breakdown_df, summary = calculate_puantaj(edited_df)
-
-    st.divider()
-    st.subheader("Özet")
-    st.caption(f"**Dönem:** {summary['donem']} · **Toplam kayıt:** {summary['toplam_gun']} gün")
-
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Toplam NM", hours_to_time(summary["toplam_nm"]))
-    m2.metric("Toplam FM", hours_to_time(summary["toplam_fm"]))
-    m3.metric("Çalışılan Gün", summary["calisma_gun"])
-    m4.metric("Pazar Kesilen Hafta", summary["pazar_yanan_hafta"])
-
-    st.markdown("**İzin, rapor ve devamsızlık dağılımı**")
-    st.dataframe(leave_breakdown_df, use_container_width=True, hide_index=True)
-
-    st.markdown("**Dönem ve hafta bilgisi**")
-    h1, h2, h3, h4 = st.columns(4)
-    h1.metric("ISO Hafta Sayısı", summary["iso_hafta_sayisi"])
-    h2.metric("Tam Hafta", summary["tam_hafta_sayisi"])
-    h3.metric("Kısmi Hafta", summary["kisami_hafta_sayisi"])
-    h4.metric("Devamsızlık", f"{summary['devamsizlik_gun']} gün · {hours_to_time(summary['devamsizlik_saat'])}")
-
-    st.info(
-        "Hafta sayısı takvim ayına göre sabit değildir. Dosyadaki tarihlerin düştüğü "
-        "**ISO haftaları** (Pazartesi–Pazar) sayılır. Ayın 1'i veya son günü haftanın ortasındaysa "
-        "o hafta **kısmi** görünür; dosyada o haftaya ait kaç gün varsa o kadar gün listelenir."
-    )
-
-    st.divider()
-    st.subheader("Günlük Özet")
-    st.dataframe(daily_df, use_container_width=True, hide_index=True)
-
-    st.subheader("Haftalık Mesai Dağılımı")
-    st.caption("45 saat kuralı sonrası NM/FM toplamları ve pazar kesinti durumu.")
-    st.dataframe(weekly_df, use_container_width=True, hide_index=True)
-
-    with st.expander("Tam detay tablosu", expanded=False):
-        st.dataframe(processed_df, use_container_width=True)
-
-    safe_name = employee_label.replace(" ", "_")
-    csv_buffer = io.StringIO()
-    daily_df.to_csv(csv_buffer, sep=";", index=False, encoding="utf-8")
-    st.download_button(
-        "Günlük özeti indir (CSV)",
-        data=csv_buffer.getvalue(),
-        file_name=f"Puantaj_{safe_name}.csv",
-        mime="text/csv",
-        type="primary",
-    )
-
-def render_employee_list(employee_list):
-    st.subheader("Personel Listesi")
-    st.caption("Bir personel satırına tıklayın; hesaplama ekranı açılır.")
-
-    search = st.text_input("Personel ara", placeholder="Ad veya soyad yazın...")
-    filtered = employee_list.copy()
-    if search.strip():
-        mask = (
-            filtered["Ad"].str.contains(search, case=False, na=False)
-            | filtered["Soyad"].str.contains(search, case=False, na=False)
-        )
-        filtered = filtered[mask]
-
-    st.metric("Personel Sayısı", len(filtered))
-
-    display_cols = list(filtered.columns)
-    selection = st.dataframe(
-        filtered[display_cols],
-        use_container_width=True,
-        hide_index=True,
-        on_select="rerun",
-        selection_mode="single-row",
-        key="employee_table",
-    )
-
-    if selection.selection.rows:
-        row = filtered.iloc[selection.selection.rows[0]]
-        st.session_state.selected_sicilno = row["sicilno"]
-        st.session_state.selected_employee_name = f"{row['Ad']} {row['Soyad']}"
-        st.rerun()
-
-# ── Arayüz ─────────────────────────────────────────────────────────────────
-
-st.title("Puantaj Hesaplama")
-st.caption("Meyer puantaj dosyalarından mesai düzenlemesi, izin ayrımı ve haftalık FM→NM aktarımı.")
-
-with st.expander("Nasıl çalışır?", expanded=False):
-    st.markdown("""
-**Dosya türleri**  
-- **Toplu dosya** (tüm personel): Önce personel listesi açılır; satıra tıklayınca o kişinin hesaplama ekranı gelir.  
-- **Tekil dosya** (tek personel): Doğrudan hesaplama ekranı açılır.
-
-**45 saat kuralı**  
-Hafta içi toplam NM 45 saatin altındaysa, hafta sonu FM saatleri otomatik olarak NM'ye aktarılır.
-
-**İzin entegrasyonu** (Meyer sütunları)  
-| Sütun | Anlam |
-|-------|-------|
-| `IZS`, `YIZS`, `SGKIZS`, `RM` | Ücretli izin / rapor (saatlik) |
-| `EM` | Tam gün ücretli izin (NM=0 ve EM≥9 saat) |
-| `UCZIZS` | Ücretsiz izin |
-| `İzin Açıklama` | İzin türü metni (ör. YILLIK IZIN) |
-
-**Gün durumları**  
-Çalışma · Ücretli İzin / Rapor · Ücretsiz İzin · Devamsızlık · Hafta Sonu
-
-**Pazar kesinti kuralı**  
-Yalnızca tek bir iş gününde `9:00` saat tam devamsızlık varsa o haftada pazar "Yanar" olur.  
-Parçalı devamsızlık toplamı `9:00` olsa bile pazar kesintisi tetiklenmez.
-    """)
-
-uploaded_file = st.file_uploader(
-    "Puantaj dosyası yükleyin",
-    type=["csv", "xlsx", "xls"],
-    help="Tek personel dosyası veya tüm personeli içeren Meyer puantaj dosyası",
-)
-
-if "master_df" not in st.session_state:
-    st.session_state.master_df = None
-if "uploaded_name" not in st.session_state:
-    st.session_state.uploaded_name = None
-if "selected_sicilno" not in st.session_state:
-    st.session_state.selected_sicilno = None
-if "selected_employee_name" not in st.session_state:
-    st.session_state.selected_employee_name = None
-
-if uploaded_file is not None:
-    try:
-        if uploaded_file.name != st.session_state.uploaded_name:
-            st.session_state.uploaded_name = uploaded_file.name
-            st.session_state.master_df = read_uploaded_file(uploaded_file)
-            st.session_state.selected_sicilno = None
-            st.session_state.selected_employee_name = None
-
-        master_df = st.session_state.master_df
-        bulk = is_bulk_file(master_df)
-
-        if bulk and st.session_state.selected_sicilno:
-            if st.button("← Personel listesine dön", type="secondary"):
-                st.session_state.selected_sicilno = None
-                st.session_state.selected_employee_name = None
-                st.rerun()
-
-            employee_df = filter_employee_df(master_df, st.session_state.selected_sicilno)
-            employee_df = normalize_meyer_rows(employee_df)
-            render_employee_detail(employee_df, st.session_state.selected_employee_name)
-
-        elif bulk:
-            employee_list = build_employee_list(master_df)
-            render_employee_list(employee_list)
-
-        else:
-            df = normalize_meyer_rows(master_df)
-            employee_name = "Personel"
-            if "Ad" in df.columns and "Soyad" in df.columns and not df.empty:
-                employee_name = f"{df['Ad'].iloc[0]} {df['Soyad'].iloc[0]}"
-            render_employee_detail(df, employee_name)
-
-    except Exception as e:
-        st.error(f"Dosya işlenirken hata oluştu: {e}")
+    return employee_df[employee_df["sicilno"] == str(sicilno).zfill(5)].copy()

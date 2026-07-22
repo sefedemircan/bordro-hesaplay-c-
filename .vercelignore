@@ -1,0 +1,15 @@
+# Vercel yalnızca FastAPI backend'i paketlesin
+streamlit_demo.py
+requirements-streamlit.txt
+.streamlit
+ui_navigation.py
+pages
+web
+data
+tests
+.venv
+.env
+*.pyc
+__pycache__
+.pytest_cache
+MEYER_CANIAS_TOPLANTI_NOTLARI.md
