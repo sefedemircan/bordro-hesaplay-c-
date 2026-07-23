@@ -459,7 +459,7 @@ export async function buildReport(
 
 Personel arama (client-side): `Personel` veya `Sicil No` üzerinde filter; `monthly` filtreleyip `Sicil No` set’i ile `summary` / `weekly` / `daily` daraltın.
 
-**Matris hücreleri:** Çalışma gününde sayısal saat (NM+FM); diğerlerinde kod (`H`, `Z`, `S`, `İ`, `R`, `E`, …). Efsane: `GET /api/v1/meta` → `code_legend`.
+**Matris hücreleri:** Çalışma gününde sayısal saat (NM+FM); diğerlerinde kod (`T`, `Z`, `Y`, `Ü`, `R`, `M`, `A3`, …). Efsane: `GET /api/v1/meta` → `code_legend`.
 
 ---
 
@@ -552,7 +552,9 @@ Frontend’in hesaplaması gerekmez; kullanıcıya açıklama göstermek için:
 
 **45 saat kuralı:** Hafta içi NM &lt; 45 ise hafta sonu FM → NM aktarılır.
 
-**Pazar kesinti (calc):** Bir iş gününde tam `9:00` devamsızlık varsa o hafta pazar **Yanar**. Parçalı toplam 9 saat tetiklemez.
+**Pazar kesinti (calc):** Yalnızca tek bir iş gününde `9:00` saat **mazeretsiz** devamsızlık varsa o hafta pazar **Yanar**. Rapor, yıllık/ücretli izin ve resmi tatiller çalışılmış sayılır; tetiklemez. Parçalı toplam 9 saat tetiklemez.
+
+**Pazar kesinti (rapor):** Aynı kural; kesilen pazara `Z`, hak edilen pazara `T` yazılır. Cumartesi mesaisizse `A3`.
 
 **Pazar kesinti (report):** Özet/haftalıkta **Kesildi** / **Hak Edildi**; matriste `Z` kodu.
 

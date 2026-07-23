@@ -60,7 +60,7 @@ Frontend’de Streamlit demosundaki gibi **iki ayrı sayfa / route** düşünül
 
 **Matris hücreleri:**
 - Çalışılan günde: o günün çalışma saati (NM + FM özeti)
-- Diğer günlerde: durum kodu (`H`, `Z`, `S`, `İ`, `R`, `E`, …) — efsane API `meta` ve rapor ekranında vardır
+- Diğer günlerde: durum kodu (`T`, `Z`, `Y`, `Ü`, `R`, `M`, `A3`, …) — efsane API `meta` ve rapor ekranında vardır
 
 ---
 
@@ -83,9 +83,10 @@ Bunları frontend’de yeniden hesaplamanız gerekmez; backend uygular. Kullanı
 
 1. **45 saat kuralı** — Hafta içi NM 45’in altındaysa, aynı haftanın hafta sonu FM’sinden eksik kısım NM’ye aktarılır.
 2. **İzin ayrımı** — Ücretli izin / yıllık / SGK raporu / ücretsiz izin sütun ve açıklamalardan ayrılır.
-3. **Devamsızlık** — Hafta içi beklenen süre (varsayılan 9 saat veya `MS`) karşılanmazsa ve izin yoksa.
-4. **Pazar kesintisi** — Bir iş gününde tam gün (~9 saat) devamsızlık varsa o haftanın pazarı kesilir (“Yanar” / rapor tarafında `Z`).
-5. **Hafta sayısı** — Takvim ayına sabit değildir; dosyadaki tarihlerin düştüğü ISO haftaları sayılır.
+3. **Devamsızlık** — Hafta içi beklenen süre (varsayılan 9 saat veya `MS`) karşılanmazsa ve izin yoksa (`M`).
+4. **Pazar kesintisi** — Yalnızca mazeretsiz tam gün (~9 saat) devamsızlıkta o haftanın pazarı kesilir (`Z`). Rapor, yıllık/ücretli mazeret izni, işveren izni ve resmi tatiller **çalışılmış sayılır**; hafta tatili hakkı düşmez (`T`).
+5. **Cumartesi** — Mesai (NM/FM) yoksa `A3` (serbest zaman); mesai varsa saat yazılır.
+6. **Hafta sayısı** — Takvim ayına sabit değildir; dosyadaki tarihlerin düştüğü ISO haftaları sayılır.
 
 ---
 

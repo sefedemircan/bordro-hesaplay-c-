@@ -20,6 +20,19 @@ from openpyxl.utils import get_column_letter
 WEEKLY_MAX_HOURS = 45.0
 FULL_DAY_HOURS = 9.0
 
+# Yasal mazeret / izin / resmi tatil: çalışılmış sayılır, hafta tatili kesilmez.
+SUNDAY_PROTECTING_STATUSES = frozenset({
+    "RAPOR",
+    "YILLIK_IZIN",
+    "UCRETLI_IZIN",
+    "RESMI_TATIL",
+    "YARIM_GUN",
+    "UZAKTAN",
+    "CALISMA",
+    "SERBEST_ZAMAN",
+    "HARIC",
+})
+
 STATUS_LABELS = {
     "CALISMA": "Çalışma",
     "YILLIK_IZIN": "Yıllık İzin",
@@ -32,30 +45,68 @@ STATUS_LABELS = {
     "RESMI_TATIL": "Resmi Tatil",
     "SERBEST_ZAMAN": "Serbest Zaman",
     "HARIC": "Sayılmayan Gün",
+    "UZAKTAN": "Uzaktan Çalışma",
+    "YARIM_GUN": "Yarım Gün",
 }
 
 STATUS_CODES = {
-    "YILLIK_IZIN": "S",
-    "UCRETLI_IZIN": "İ",
+    "YILLIK_IZIN": "Y",
+    "UCRETLI_IZIN": "Ü",
     "RAPOR": "R",
-    "UCRETSIZ_IZIN": "E",
-    "DEVAMSIZ": "E",
-    "HAFTA_TATILI": "H",
-    "UCRETSIZ_HAFTA_TATILI": "Z",
-    "RESMI_TATIL": "T",
-    "SERBEST_ZAMAN": "A",
+    "UCRETSIZ_IZIN": "Z",
+    "DEVAMSIZ": "M",
+    "HAFTA_TATILI": "T",
+    "UCRETSIZ_HAFTA_TATILI": "C",
+    "RESMI_TATIL": "B",
+    "SERBEST_ZAMAN": "A3",
     "HARIC": "X",
+    "UZAKTAN": "U",
+    "YARIM_GUN": "V",
 }
 
 CODE_LEGEND = [
     ("Saat", "Fiili çalışma (NM + FM)"),
-    ("H", "Hafta tatili"),
-    ("Z", "Tam gün devamsızlık nedeniyle kesilen hafta tatili"),
-    ("S", "Yıllık izin"),
-    ("İ", "Diğer ücretli izin"),
-    ("R", "Sağlık raporu"),
-    ("E", "Ücretsiz izin veya devamsızlık; ayrımı özet/detay sayfasındadır"),
+    ("N", "Normal çalışma (9,00)"),
+    ("U", "Uzaktan çalışma (9,00)"),
+    ("R", "Raporlu (7,50)"),
+    ("W", "Tatilde raporlu (7,50)"),
+    ("Y", "Yıllık izin (7,50)"),
+    ("Ü", "Ücretli izin (7,50)"),
+    ("Z", "Ücretsiz izin / mazeretsiz nedeniyle kesilen hafta tatili (7,50)"),
+    ("M", "Mazeretsiz (7,50)"),
+    ("T", "Hafta tatili / resmi tatil (7,50)"),
+    ("C", "Ücretsiz hafta tatili (7,50)"),
+    ("B", "Resmi tatil hafta içi (7,50)"),
+    ("D", "Dini bayram (7,50)"),
+    ("K", "Yarım gün resmi tatil (3,75)"),
+    ("V", "Yarım gün (3,75)"),
+    ("X", "Sayılmayan gün (9,00)"),
+    ("A1", "Serbest zaman maktu tam gün (1)"),
+    ("A2", "Serbest zaman maktu yarım gün (0,5)"),
+    ("A3", "Serbest zaman saatlik tam gün / cumartesi mesaisiz (0)"),
+    ("A4", "Serbest zaman saatlik yarım gün (3,75)"),
 ]
+
+EXCEL_CODE_COLORS = {
+    "T": "D9EAD3",
+    "Z": "F4CCCC",
+    "C": "F4CCCC",
+    "Y": "D9EAF7",
+    "Ü": "CFE2F3",
+    "R": "FFF2CC",
+    "W": "FFF2CC",
+    "M": "FCE5CD",
+    "A3": "EAD1DC",
+    "A1": "EAD1DC",
+    "A2": "EAD1DC",
+    "A4": "EAD1DC",
+    "B": "D0E0E3",
+    "D": "D0E0E3",
+    "K": "D0E0E3",
+    "V": "D9D2E9",
+    "X": "EFEFEF",
+    "U": "D9EAD3",
+}
 
 
 @dataclass
@@ -141,15 +192,74 @@ def _sakra_code_fields(value: object) -> dict[str, object]:
     fields: dict[str, object] = {"Kaynak Kod": code}
     if normalized in {"R", "W"}:
         fields["SGKIZS"] = "07:30:00"
-    elif normalized == "S":
+    elif normalized in {"Y", "S"}:
         fields["YIZS"] = "07:30:00"
-    elif normalized == "I":
+    elif code in {"Ü", "ü"} or normalized == "I":
         fields["IZS"] = "07:30:00"
-    elif normalized == "E":
+    elif normalized in {"M", "E"}:
         fields["EM"] = "09:00:00"
     elif normalized == "Z":
         fields["UCZIZS"] = "07:30:00"
+    elif normalized == "C":
+        fields["UCZIZS"] = "07:30:00"
+    elif normalized == "V":
+        fields["IZS"] = "03:45:00"
     return fields
+
+
+def _source_status_from_code(raw_code: object) -> str | None:
+    """Kaynak harf kodunu durum etiketine çevirir (görsel + eski Sakra)."""
+    code = str(raw_code).strip() if raw_code is not None else ""
+    if not code:
+        return None
+    if code in {"Ü", "ü"}:
+        return "UCRETLI_IZIN"
+    normalized = _normalized_text(code)
+    return {
+        "R": "RAPOR",
+        "W": "RAPOR",
+        "Y": "YILLIK_IZIN",
+        "S": "YILLIK_IZIN",  # eski Sakra
+        "I": "UCRETLI_IZIN",  # eski Sakra İ/I
+        "Z": "UCRETSIZ_IZIN",
+        "M": "DEVAMSIZ",
+        "E": "DEVAMSIZ",  # eski Sakra
+        "T": "HAFTA_TATILI",
+        "H": "HAFTA_TATILI",  # eski Sakra
+        "C": "UCRETSIZ_HAFTA_TATILI",
+        "X": "HARIC",
+        "B": "RESMI_TATIL",
+        "D": "RESMI_TATIL",
+        "K": "RESMI_TATIL",
+        "U": "UZAKTAN",
+        "N": "CALISMA",
+        "V": "YARIM_GUN",
+        "A1": "SERBEST_ZAMAN",
+        "A2": "SERBEST_ZAMAN",
+        "A3": "SERBEST_ZAMAN",
+        "A4": "SERBEST_ZAMAN",
+    }.get(normalized)
+
+
+def _classify_row(row: pd.Series) -> str:
+    source_status = _source_status_from_code(row.get("Kaynak Kod", ""))
+    if source_status:
+        return source_status
+    description = _normalized_text(row.get("İzin Açıklama", ""))
+    if row["SGKIZS_h"] > 0 or row["RM_h"] > 0 or "RAPOR" in description or "SGK" in description:
+        return "RAPOR"
+    if row["YIZS_h"] > 0 or "YILLIK" in description:
+        return "YILLIK_IZIN"
+    if row["UCZIZS_h"] > 0 or "UCRETSIZ" in description:
+        return "UCRETSIZ_IZIN"
+    if row["IZS_h"] > 0 or ("IZIN" in description and "#__#" not in description):
+        return "UCRETLI_IZIN"
+    if row["NM_h"] > 0 or row["FM_h"] > 0:
+        return "CALISMA"
+    if row["is_weekend"]:
+        return "HAFTA_TATILI"
+    # Meyer'deki EM eksik mesai alanıdır; tek başına izin kanıtı değildir.
+    return "DEVAMSIZ"
 
 
 def _read_sakra_workbook(file_or_buffer: str | BinaryIO) -> pd.DataFrame | None:
@@ -308,34 +418,6 @@ def _employee_id(value: object) -> str:
     return text
 
 
-def _classify_row(row: pd.Series) -> str:
-    source_code = _normalized_text(row.get("Kaynak Kod", ""))
-    source_status = {
-        "R": "RAPOR", "W": "RAPOR", "S": "YILLIK_IZIN", "I": "UCRETLI_IZIN",
-        "E": "DEVAMSIZ", "H": "HAFTA_TATILI", "Z": "UCRETSIZ_HAFTA_TATILI",
-        "X": "HARIC", "T": "RESMI_TATIL", "U": "RESMI_TATIL", "K": "RESMI_TATIL",
-        "C": "RESMI_TATIL", "Y": "RESMI_TATIL", "A1": "SERBEST_ZAMAN",
-        "A2": "SERBEST_ZAMAN", "A3": "SERBEST_ZAMAN", "A4": "SERBEST_ZAMAN",
-    }.get(source_code)
-    if source_status:
-        return source_status
-    description = _normalized_text(row.get("İzin Açıklama", ""))
-    if row["SGKIZS_h"] > 0 or row["RM_h"] > 0 or "RAPOR" in description or "SGK" in description:
-        return "RAPOR"
-    if row["YIZS_h"] > 0 or "YILLIK" in description:
-        return "YILLIK_IZIN"
-    if row["UCZIZS_h"] > 0 or "UCRETSIZ" in description:
-        return "UCRETSIZ_IZIN"
-    if row["IZS_h"] > 0 or ("IZIN" in description and "#__#" not in description):
-        return "UCRETLI_IZIN"
-    if row["NM_h"] > 0 or row["FM_h"] > 0:
-        return "CALISMA"
-    if row["is_weekend"]:
-        return "HAFTA_TATILI"
-    # Meyer'deki EM eksik mesai alanıdır; tek başına izin kanıtı değildir.
-    return "DEVAMSIZ"
-
-
 def prepare_daily(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     df = normalize_columns(df)
     required = {"sicilno", "Ad", "Soyad", "mesaitarih", "NM", "FM"}
@@ -403,7 +485,14 @@ def prepare_daily(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.Data
 
         sunday_idx = week.index[week["day_of_week"] == 6].tolist()
         source_burned = bool(work.loc[sunday_idx, "Durum"].eq("UCRETSIZ_HAFTA_TATILI").any())
-        full_absence = source_burned or bool(((work.loc[weekday_idx, "Durum"] == "DEVAMSIZ") & (work.loc[weekday_idx, "EM_h"].fillna(0) >= FULL_DAY_HOURS - 0.01)).any())
+        # Yalnızca mazeretsiz/devamsızlık keser; rapor, ücretli izin, resmi tatil vb. çalışılmış sayılır.
+        weekday_slice = work.loc[weekday_idx]
+        unprotected = weekday_slice["Durum"].eq("DEVAMSIZ") & (
+            weekday_slice["EM_h"].fillna(0) >= FULL_DAY_HOURS - 0.01
+        )
+        # Korunan durumlar açıkça dışlanır (ileride sınıflama değişirse güvence).
+        protected = weekday_slice["Durum"].isin(SUNDAY_PROTECTING_STATUSES)
+        full_absence = source_burned or bool((unprotected & ~protected).any())
         work.loc[sunday_idx, "Pazar Durumu"] = "Kesildi" if full_absence else "Hak Edildi"
         if full_absence:
             work.loc[sunday_idx, "Hafta Tatili Kodu"] = "Z"
@@ -427,12 +516,25 @@ def prepare_daily(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.Data
 
     work["Durum Açıklaması"] = work["Durum"].map(STATUS_LABELS)
     work["Kod"] = work["Durum"].map(STATUS_CODES).astype(object)
-    working = work["Durum"].eq("CALISMA")
+    working = work["Durum"].isin({"CALISMA", "UZAKTAN"})
     work.loc[working, "Kod"] = (work.loc[working, "NM_h"] + work.loc[working, "FM_h"]).map(lambda h: round(h, 2))
+    # Uzaktan çalışma saati yoksa U harfi kalsın.
+    remote_no_hours = work["Durum"].eq("UZAKTAN") & (work["NM_h"] + work["FM_h"] <= 0.01)
+    work.loc[remote_no_hours, "Kod"] = "U"
     source_code_mask = work["Kaynak Kod"].fillna("").astype(str).str.strip().ne("") & ~working
     work.loc[source_code_mask, "Kod"] = work.loc[source_code_mask, "Kaynak Kod"]
     burned_sunday = (work["day_of_week"] == 6) & work["Pazar Durumu"].eq("Kesildi") & work["Durum"].eq("HAFTA_TATILI")
     work.loc[burned_sunday, "Kod"] = "Z"
+
+    # Cumartesi mesai yoksa A3 (serbest zaman saatlik tam gün).
+    saturday_no_mesai = (
+        work["day_of_week"].eq(5)
+        & work["Durum"].eq("HAFTA_TATILI")
+        & ((work["NM_h"] + work["FM_h"]) <= 0.01)
+    )
+    work.loc[saturday_no_mesai, "Durum"] = "SERBEST_ZAMAN"
+    work.loc[saturday_no_mesai, "Durum Açıklaması"] = STATUS_LABELS["SERBEST_ZAMAN"]
+    work.loc[saturday_no_mesai, "Kod"] = "A3"
 
     if not quality_rows:
         quality_rows.append({"Seviye": "Bilgi", "Kontrol": "Dosya yapısı", "Kayıt": len(work), "Açıklama": "Zorunlu alanlar ve kişi-gün anahtarı uygun."})
@@ -495,6 +597,8 @@ def build_report(df: pd.DataFrame, year: int | None = None, month: int | None = 
             "Ücretsiz Hafta Tatili (gün)": int(status_counts.get("UCRETSIZ_HAFTA_TATILI", 0)),
             "Resmi Tatil (gün)": int(status_counts.get("RESMI_TATIL", 0)),
             "Serbest Zaman (gün)": int(status_counts.get("SERBEST_ZAMAN", 0)),
+            "Uzaktan Çalışma (gün)": int(status_counts.get("UZAKTAN", 0)),
+            "Yarım Gün": int(status_counts.get("YARIM_GUN", 0)),
             "Sayılmayan Gün": int(status_counts.get("HARIC", 0)),
             "Pazar Kesintisi": int(group["Pazar Durumu"].eq("Kesildi").sum()),
         })
@@ -557,9 +661,8 @@ def create_excel_report(result: ReportResult) -> bytes:
     for row in monthly_ws.iter_rows(min_row=2, min_col=8):
         for cell in row:
             cell.alignment = Alignment(horizontal="center")
-            if cell.value in {"H", "Z", "S", "İ", "R", "E"}:
-                colors = {"H": "D9EAD3", "Z": "F4CCCC", "S": "D9EAF7", "İ": "CFE2F3", "R": "FFF2CC", "E": "FCE5CD"}
-                cell.fill = PatternFill("solid", fgColor=colors[cell.value])
+            if cell.value in EXCEL_CODE_COLORS:
+                cell.fill = PatternFill("solid", fgColor=EXCEL_CODE_COLORS[cell.value])
 
     summary = result.summary.copy()
     weekly = result.weekly.copy()

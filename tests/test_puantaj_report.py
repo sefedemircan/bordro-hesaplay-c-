@@ -30,6 +30,37 @@ def sample_frame():
     return pd.DataFrame(rows)
 
 
+def week_with_leave(leave_column: str, leave_code: str | None = None):
+    """Hafta içi bir gün izinli; cumartesi mesaisiz."""
+    rows = []
+    for day in range(1, 8):
+        row = {
+            "sicilno": "00002",
+            "Ad": "IZIN",
+            "Soyad": "PERSONEL",
+            "mesaitarih": pd.Timestamp(2026, 6, day),
+            "NM": time(9) if day <= 4 else time(0),
+            "FM": time(0),
+            "MS": time(9) if day <= 5 else time(0),
+            "EM": time(0),
+            "IZS": time(0),
+            "YIZS": time(0),
+            "SGKIZS": time(0),
+            "UCZIZS": time(0),
+            "RM": time(0),
+            "İzin Açıklama": "#__#",
+            "Bölüm": "Üretim",
+            "Kaynak Kod": "",
+        }
+        if day == 5:
+            row["NM"] = time(0)
+            row[leave_column] = time(7, 30)
+            if leave_code:
+                row["Kaynak Kod"] = leave_code
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
 def test_time_to_hours_supports_excel_values():
     assert time_to_hours(time(8, 30)) == 8.5
     assert time_to_hours(0.5) == 12
@@ -41,8 +72,30 @@ def test_report_applies_weekend_transfer_and_sunday_cut():
     assert result.weekly.loc[0, "FM→NM Aktarım"] == 3
     assert result.weekly.loc[0, "Kalan FM"] == 0
     assert result.weekly.loc[0, "Pazar Durumu"] == "Kesildi"
-    assert result.monthly.loc[0, "05 Cu"] == "E"
+    assert result.monthly.loc[0, "05 Cu"] == "M"
+    assert result.monthly.loc[0, "06 Ct"] == 3.0
     assert result.monthly.loc[0, "07 Pz"] == "Z"
+
+
+def test_saturday_without_overtime_is_a3():
+    frame = sample_frame()
+    frame.loc[frame["mesaitarih"] == pd.Timestamp(2026, 6, 6), "FM"] = time(0)
+    result = build_report(frame, 2026, 6)
+    assert result.monthly.loc[0, "06 Ct"] == "A3"
+    assert result.monthly.loc[0, "07 Pz"] == "Z"
+
+
+def test_protected_leave_does_not_cut_sunday():
+    for column, expected_code in (
+        ("YIZS", "Y"),
+        ("SGKIZS", "R"),
+        ("IZS", "Ü"),
+    ):
+        result = build_report(week_with_leave(column), 2026, 6)
+        assert result.weekly.loc[0, "Pazar Durumu"] == "Hak Edildi", column
+        assert result.monthly.loc[0, "05 Cu"] == expected_code, column
+        assert result.monthly.loc[0, "06 Ct"] == "A3", column
+        assert result.monthly.loc[0, "07 Pz"] == "T", column
 
 
 def test_excel_report_is_created():
